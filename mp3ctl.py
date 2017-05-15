@@ -11,6 +11,7 @@ import tempfile
 import time
 
 class MP3Ctl:
+    MUSCTL = "musctl.py"
     PL_REFMT_EXT = "m3u8" # fixes Unicode playlists in Rockbox
     PL_REFMT_PREFIX = "/<microSD1>/music" # easy method for making MPD playlists
                                           # work with Rockbox
@@ -144,7 +145,7 @@ class MP3Ctl:
         self.get_shell(["rsync", "-av", "--modify-window=10", "{}/".format(src), dst])
 
     def cp_playlists(self):
-        self.mount_dev("media")
+        self.get_shell([MP3Ctl.MUSCTL, "deduplicate-playlists"])
         tmpdir = os.path.join(self.root_tmpdir, "playlists")
         os.mkdir(tmpdir)
 
@@ -158,11 +159,11 @@ class MP3Ctl:
             for line in fileinput.input([os.path.join(tmpdir, f)], inplace=True):
                 sys.stdout.write("{}/{}".format(MP3Ctl.PL_REFMT_PREFIX, line))
 
+        self.mount_dev("media")
         self.__cp_contents(tmpdir, os.path.join(self.device_dir["media"], "playlists"))
         self.unmount_dev("media")
 
     def cp_lyrics(self):
-        self.mount_dev("media")
         tmpdir = os.path.join(self.root_tmpdir, "lyrics")
         os.mkdir(tmpdir)
 
@@ -179,6 +180,7 @@ class MP3Ctl:
             track_title = match[2]
             shutil.move(os.path.join(tmpdir, f), os.path.join(tmpdir, track_title) + ".txt")
 
+        self.mount_dev("media")
         self.__cp_contents(tmpdir, os.path.join(self.device_dir["media"], "lyrics"))
         self.unmount_dev("media")
 
