@@ -57,7 +57,7 @@ class MP3Ctl:
         subparsers.required = True
 
         subp_scrob = subparsers.add_parser("process-scrobbles",
-                aliases=["scrobbles"],
+                aliases=["scrobble"],
                 help="process one or more scrobble logs",
                 description="By default, archive and scrobble the MP3 player's scrobble log. If arguments are given, leave the MP3 player and scrobble the given logs in place.")
         subp_scrob.add_argument("file", nargs="*", help="logs to scrobble instead of the MP3 player log")
