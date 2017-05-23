@@ -37,6 +37,9 @@ class MP3Ctl:
 
         self.root_tmpdir = tempfile.mkdtemp(prefix="tmp-{}-".format(os.path.basename(__file__)))
 
+    def __deinit(self):
+        shutil.rmtree(self.root_tmpdir)
+
     ## CLI-related {{{
     def __init_logging(self):
         self.logger = logging.getLogger(os.path.basename(sys.argv[0]))
@@ -48,9 +51,25 @@ class MP3Ctl:
         self.parser = argparse.ArgumentParser(description="Manage and maintain a music library.")
         self.parser.add_argument("-v", "--verbose", help="be verbose", action="count", default=0)
         self.parser.add_argument("-q", "--quiet", help="be quiet (overrides -v)", action="count", default=0)
-        self.parser.add_argument("-e", "--edit", help="edit scrobble logs before submitting", action="store_true")
-        self.parser.add_argument("command", help="command to run")
-        self.parser.add_argument("arguments", nargs="*", help="arguments for command")
+        subparsers = self.parser.add_subparsers(title="commands", dest="command", metavar="[command]")
+        subparsers.required = True
+
+        subp_scrob = subparsers.add_parser("process-scrobbles", help="process one or more scrobble logs", aliases=["scrobbles"], description="By default, archive and scrobble the MP3 player's scrobble log. If arguments are given, leave the MP3 player and scrobble the given logs in place.")
+        subp_scrob.add_argument("file", nargs="*", help="logs to scrobble instead of the MP3 player log")
+        subp_scrob.add_argument("-e", "--edit", help="edit logs before scrobbling", action="store_true")
+        subp_scrob.set_defaults(func=self.process_scrobbles)
+
+        subp_music = subparsers.add_parser("cp-music", help="music -> MP3 player", aliases=["music"], description="Copy full music library to MP3 player.")
+        subp_music.set_defaults(func=self.cp_music)
+
+        subp_pl = subparsers.add_parser("cp-playlists", help="playlists -> MP3 player", aliases=["playlists"], description="Copy all playlists to MP3 player.")
+        subp_pl.set_defaults(func=self.cp_playlists)
+
+        subp_lyrics = subparsers.add_parser("cp-lyrics", help="lyrics -> MP3 player", aliases=["lyrics"], description="Copy all lyric files to MP3 player.")
+        subp_lyrics.set_defaults(func=self.cp_lyrics)
+
+        subp_all = subparsers.add_parser("all", help="run all commands", description="Run all commands.")
+        subp_all.set_defaults(func=self.cmd_all)
 
         self.args = self.parser.parse_args()
         if self.args.verbose == 0:
@@ -60,49 +79,13 @@ class MP3Ctl:
         if self.args.quiet >= 1:
             self.logger.setLevel(logging.NOTSET)
 
-        # dictionary of command -> function
-        # command aliases are easily specified by adding to the key tuple
-        self.cmds = {
-            ("all",):
-                self.cmd_all,
-            ("process-scrobbles", "scrobbles"):
-                lambda: self.process_scrobbles(self.args.arguments),
-            ("cp-music", "music"):
-                self.cp_music,
-            ("cp-playlists", "playlists"):
-                self.cp_playlists,
-            ("cp-lyrics", "lyrics"):
-                self.cp_lyrics,
-            ("help", "h"):
-                lambda: self.__show_cmd_help(self.args.arguments),
-        }
-
-    def __show_cmd_help(self, args):
-        """Show specific command help, or list available commands."""
-        if not args:
-            print("Available commands: {}".format(", ".join([c[0] for c in self.cmds])))
-        else:
-            aliases = [c for c in self.cmds.keys() if args[0] in c]
-            if not aliases:
-                self.exit("unknown command '{}'".format(args[0]), 5)
-            aliases = aliases[0]
-            print("Command: {}".format(aliases[0]))
-            print("Aliases: {}".format(", ".join(aliases[1:])))
-
-    def __parse_cmd(self):
-        """Parse commandline command and run a command if found."""
-        for cmd_options, cmd_exec in self.cmds.items():
-            if self.args.command in cmd_options:
-                cmd_exec()
-                break
-        else:
-            self.exit("unknown command '{}'".format(self.args.command), 3)
+        self.args.func()
 
     def run(self):
-        """Run from CLI: parse arguments, execute command."""
+        """Run from CLI: parse arguments, execute command, deinitialise."""
         self.__init_logging()
         self.__parse_args()
-        self.__parse_cmd()
+        self.__deinit()
     ## }}}
 
     ## Device mount & unmount {{{
@@ -134,6 +117,8 @@ class MP3Ctl:
     def exit(self, msg, ret):
         """Exit with explanation."""
         self.logger.error(msg)
+        self.logger.info("deinitialising...")
+        self.__deinit()
         sys.exit(ret)
 
     def get_shell(self, args):
@@ -189,9 +174,14 @@ class MP3Ctl:
         self.__cp_contents(self.media_loc["music"], os.path.join(self.device_dir["media"], "music"))
         self.unmount_dev("media")
 
-    def process_scrobbles(self, args):
+    def process_scrobbles(self):
         log_list = []
-        if not args:
+        try:
+            for f in self.args.file:
+                if not os.path.isfile(f):
+                    self.exit("not a file: {}".format(f), MP3Ctl.ERR_ARGS)
+                log_list.append(f)
+        except AttributeError:
             log_archive_file = os.path.join(self.media_loc["scrobbles"], MP3Ctl.SCROB_LOG_ARCHIVE_FILE)
             self.mount_dev("sys")
             try:
@@ -209,11 +199,6 @@ class MP3Ctl:
 
             self.logger.info("log moved from device -> {}".format(log_archive_file))
             log_list.append(log_archive_file)
-        else:
-            for f in args:
-                if not os.path.isfile(f):
-                    self.exit("not a file: {}".format(f), MP3Ctl.ERR_ARGS)
-                log_list.append(f)
 
         for log in log_list:
             self.logger.info("scrobbling {}".format(log))
@@ -226,7 +211,7 @@ class MP3Ctl:
                 self.exit("qtscrob-cli failed, exiting", MP3Ctl.ERR_SCROBBLER)
 
     def cmd_all(self):
-        self.process_scrobbles(self.args.arguments)
+        self.process_scrobbles()
         self.cp_playlists()
         self.cp_lyrics()
         self.cp_music()
