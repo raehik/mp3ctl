@@ -8,7 +8,8 @@ import shutil
 import re
 import fileinput
 import tempfile
-import time
+import time, datetime
+import glob
 
 class MP3Ctl:
     MUSCTL = "musctl.py"
@@ -33,6 +34,7 @@ class MP3Ctl:
             "playlists": os.path.join(os.environ["HOME"], "media", "music-etc", "playlists"),
             "lyrics":    os.path.join(os.environ["HOME"], "media", "music-etc", "lyrics"),
             "scrobbles": os.path.join(os.environ["HOME"], "media", "music-etc", "mp3-scrobbles"),
+            "podcasts":  os.path.join(os.environ["HOME"], "media", "podcasts", "archive"),
         }
 
         self.root_tmpdir = tempfile.mkdtemp(prefix="tmp-{}-".format(os.path.basename(__file__)))
@@ -54,21 +56,41 @@ class MP3Ctl:
         subparsers = self.parser.add_subparsers(title="commands", dest="command", metavar="[command]")
         subparsers.required = True
 
-        subp_scrob = subparsers.add_parser("process-scrobbles", help="process one or more scrobble logs", aliases=["scrobbles"], description="By default, archive and scrobble the MP3 player's scrobble log. If arguments are given, leave the MP3 player and scrobble the given logs in place.")
+        subp_scrob = subparsers.add_parser("process-scrobbles",
+                aliases=["scrobbles"],
+                help="process one or more scrobble logs",
+                description="By default, archive and scrobble the MP3 player's scrobble log. If arguments are given, leave the MP3 player and scrobble the given logs in place.")
         subp_scrob.add_argument("file", nargs="*", help="logs to scrobble instead of the MP3 player log")
         subp_scrob.add_argument("-e", "--edit", help="edit logs before scrobbling", action="store_true")
         subp_scrob.set_defaults(func=self.process_scrobbles)
 
-        subp_music = subparsers.add_parser("cp-music", help="music -> MP3 player", aliases=["music"], description="Copy full music library to MP3 player.")
+        subp_music = subparsers.add_parser("cp-music",
+                aliases=["music"],
+                help="music -> MP3 player",
+                description="Copy full music library to MP3 player.")
         subp_music.set_defaults(func=self.cp_music)
 
-        subp_pl = subparsers.add_parser("cp-playlists", help="playlists -> MP3 player", aliases=["playlists"], description="Copy all playlists to MP3 player.")
+        subp_pl = subparsers.add_parser("cp-playlists",
+                aliases=["playlists"],
+                help="playlists -> MP3 player",
+                description="Copy all playlists to MP3 player.")
         subp_pl.set_defaults(func=self.cp_playlists)
 
-        subp_lyrics = subparsers.add_parser("cp-lyrics", help="lyrics -> MP3 player", aliases=["lyrics"], description="Copy all lyric files to MP3 player.")
+        subp_lyrics = subparsers.add_parser("cp-lyrics",
+                aliases=["lyrics"],
+                help="lyrics -> MP3 player",
+                description="Copy all lyric files to MP3 player.")
         subp_lyrics.set_defaults(func=self.cp_lyrics)
 
-        subp_all = subparsers.add_parser("all", help="run all commands", description="Run all commands.")
+        subp_podcasts = subparsers.add_parser("cp-podcasts",
+                help="podcasts -> MP3 player",
+                aliases=["podcasts"],
+                description="Copy select podcasts (defined in MP3Ctl) to MP3 player.")
+        subp_podcasts.set_defaults(func=self.cp_podcasts)
+
+        subp_all = subparsers.add_parser("all",
+                help="run all maintenance commands",
+                description="Run all maintenance commands.")
         subp_all.set_defaults(func=self.cmd_all)
 
         self.args = self.parser.parse_args()
@@ -174,6 +196,63 @@ class MP3Ctl:
         self.__cp_contents(self.media_loc["music"], os.path.join(self.device_dir["media"], "music"))
         self.unmount_dev("media")
 
+    def __podcasts_mount_sshfs(self):
+        remote_host = "raehik.net"
+        remote_port = "6176"
+        remote_dir = "media/podcasts"
+
+        if os.path.exists(self.media_loc["podcasts"]):
+            self.exit("podcast archive directory already exists", MP3Ctl.ERR_DEVICE)
+        os.mkdir(self.media_loc["podcasts"])
+
+        self.logger.info("mounting podcast archive...")
+        #self.logger.info("mounting {}:{} -p {} read-only...".format(remote_host, remote_dir, remote_port))
+        self.get_shell(["sshfs", "-o", "ro", "-p", remote_port,
+            "{}:{}".format(remote_host, remote_dir),
+            self.media_loc["podcasts"]])
+
+    def __podcasts_unmount_sshfs(self):
+        self.logger.info("unmounting podcast archive...")
+        self.get_shell(["fusermount", "-u", self.media_loc["podcasts"]])
+        os.rmdir(self.media_loc["podcasts"])
+
+    def cp_podcasts(self):
+        self.__podcasts_mount_sshfs()
+
+        ## Podcast: NHK Radio News {{{
+        p1_src = os.path.join("nhk-radio-news", "episodes")
+        p1_dest = "nhk-radio-news"
+
+        p1_src_abs = os.path.join(self.media_loc["podcasts"], p1_src)
+        p1_dest_abs = os.path.join(self.device_dir["media"], "podcasts", p1_dest)
+        d_today = datetime.datetime.now().strftime("%Y%m%d")
+        d_yest = (datetime.datetime.now() - datetime.timedelta(1)).strftime("%Y%m%d")
+        d_two_days = (datetime.datetime.now() - datetime.timedelta(2)).strftime("%Y%m%d")
+        d_tomorrow = (datetime.datetime.now() - datetime.timedelta(-2)).strftime("%Y%m%d")
+
+        # select files to copy via date globs
+        p1_selected = []
+        for glob_path in [os.path.join(p1_src_abs, p) for p in ("{}*".format(d_today), "{}*".format(d_yest), "{}*".format(d_two_days))]:
+            p1_selected.extend(glob.glob(glob_path))
+        if len(p1_selected) == 0:
+            self.logger.info("no podcasts selected, exiting without mounting")
+            self.__podcasts_unmount_sshfs()
+            return
+        ## }}}
+
+        self.mount_dev("media")
+
+        shutil.rmtree(p1_dest_abs)
+        os.mkdir(p1_dest_abs)
+
+        rsync_cmd = ["rsync", "-a", "--progress"]
+        rsync_cmd.extend(p1_selected)
+        rsync_cmd.append(p1_dest_abs)
+        self.get_shell(rsync_cmd)
+
+        self.unmount_dev("media")
+        self.__podcasts_unmount_sshfs()
+
     def process_scrobbles(self):
         log_list = []
         try:
@@ -201,7 +280,7 @@ class MP3Ctl:
             log_list.append(log_archive_file)
 
         for log in log_list:
-            self.logger.info("scrobbling {}".format(log))
+            self.logger.info("scrobbling {}...".format(log))
             if self.args.edit:
                 self.logger.info("editing {}...".format(log))
                 self.get_shell([os.getenv("EDITOR", "vim"), log])
