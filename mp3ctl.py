@@ -295,7 +295,6 @@ class MP3Ctl:
         self.cp_lyrics()
         self.cp_music()
 
-
 if __name__ == "__main__":
     mp3ctl = MP3Ctl()
     mp3ctl.run()
