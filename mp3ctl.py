@@ -255,12 +255,12 @@ class MP3Ctl:
 
     def process_scrobbles(self):
         log_list = []
-        try:
+        if len(self.args.file) >= 1:
             for f in self.args.file:
                 if not os.path.isfile(f):
                     self.exit("not a file: {}".format(f), MP3Ctl.ERR_ARGS)
                 log_list.append(f)
-        except AttributeError:
+        else:
             log_archive_file = os.path.join(self.media_loc["scrobbles"], MP3Ctl.SCROB_LOG_ARCHIVE_FILE)
             self.mount_dev("sys")
             try:
