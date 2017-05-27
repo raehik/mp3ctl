@@ -255,7 +255,7 @@ class MP3Ctl:
 
     def process_scrobbles(self):
         log_list = []
-        if len(self.args.file) >= 1:
+        if hasattr(self.args, "file") and len(self.args.file) >= 1:
             for f in self.args.file:
                 if not os.path.isfile(f):
                     self.exit("not a file: {}".format(f), MP3Ctl.ERR_ARGS)
@@ -281,7 +281,7 @@ class MP3Ctl:
 
         for log in log_list:
             self.logger.info("scrobbling {}...".format(log))
-            if self.args.edit:
+            if hasattr(self.args, "edit") and self.args.edit:
                 self.logger.info("editing {}...".format(log))
                 self.get_shell([os.getenv("EDITOR", "vim"), log])
             shutil.copy(log, os.path.join(self.root_tmpdir, MP3Ctl.SCROB_LOG))
