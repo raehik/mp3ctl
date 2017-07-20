@@ -183,6 +183,9 @@ class MP3Ctl:
         track_split = re.compile(r"(.*) - (.*).txt")
         for f in os.listdir(tmpdir):
             match = track_split.match(f)
+            if match == None:
+                # not the naming scheme we expected: leave as-is
+                continue
             track_artist = match[1]
             track_title = match[2]
             shutil.move(os.path.join(tmpdir, f), os.path.join(tmpdir, track_title) + ".txt")
