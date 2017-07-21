@@ -174,12 +174,13 @@ class MP3Ctl:
         tmpdir = os.path.join(self.root_tmpdir, "lyrics")
         os.mkdir(tmpdir)
 
-        # cp to tmpdir
+        self.logger.info("copying lyrics to a temporary dir...")
         for f in os.listdir(self.media_loc["lyrics"]):
             shutil.copy(os.path.join(self.media_loc["lyrics"], f),
                         os.path.join(tmpdir, f))
 
         # change naming scheme: "artist - title.txt" -> "title.txt"
+        self.logger.info("renaming lyric files...")
         track_split = re.compile(r"(.*) - (.*).txt")
         for f in os.listdir(tmpdir):
             match = track_split.match(f)
