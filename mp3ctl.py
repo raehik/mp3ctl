@@ -176,6 +176,10 @@ class MP3Ctl:
 
         self.logger.info("copying lyrics to a temporary dir...")
         for f in os.listdir(self.media_loc["lyrics"]):
+            with open(os.path.join(self.media_loc["lyrics"], f)) as f_handle:
+                # don't copy lyrics for instrumental songs with no notes
+                if f_handle.read().strip() == "[instrumental]":
+                    continue
             shutil.copy(os.path.join(self.media_loc["lyrics"], f),
                         os.path.join(tmpdir, f))
 
