@@ -10,6 +10,8 @@ import fileinput
 import tempfile
 import time, datetime
 import glob
+import pylast
+import configparser
 
 class MP3Ctl:
     MUSCTL = "musctl.py"
@@ -18,6 +20,7 @@ class MP3Ctl:
                                           # work with Rockbox
     SCROB_LOG = ".scrobbler.log"
     SCROB_LOG_ARCHIVE_FILE = "{}-scrobbler-log.txt".format(time.strftime("%F-%T"))
+    CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expandvars("$HOME/.config"), "mp3ctl.ini")
 
     ERR_DEVICE = 3
     ERR_ARGS = 4
@@ -38,6 +41,9 @@ class MP3Ctl:
         }
 
         self.root_tmpdir = tempfile.mkdtemp(prefix="tmp-{}-".format(os.path.basename(__file__)))
+
+        self.config = configparser.ConfigParser()
+        self.config.read(MP3Ctl.CONFIG_FILE)
 
     def __deinit(self):
         shutil.rmtree(self.root_tmpdir)
@@ -287,15 +293,53 @@ class MP3Ctl:
             self.logger.info("log moved from device -> {}".format(log_archive_file))
             log_list.append(log_archive_file)
 
+        self.__init_scrobbler()
+
         for log in log_list:
-            self.logger.info("scrobbling {}...".format(log))
             if hasattr(self.args, "edit") and self.args.edit:
                 self.logger.info("editing {}...".format(log))
                 self.get_shell([os.getenv("EDITOR", "vim"), log])
-            shutil.copy(log, os.path.join(self.root_tmpdir, MP3Ctl.SCROB_LOG))
-            ret = self.get_shell(["qtscrob-cli", "--file", "--location", self.root_tmpdir])
-            if ret != 0:
-                self.exit("qtscrob-cli failed, exiting", MP3Ctl.ERR_SCROBBLER)
+            self.__submit_scrobble_log(log)
+
+    def __init_scrobbler(self):
+        self.scrobbler = pylast.LastFMNetwork(
+                api_key=self.config["Scrobbling"]["api_key"],
+                api_secret=self.config["Scrobbling"]["api_secret"],
+                username=self.config["Scrobbling"]["username"],
+                password_hash=self.config["Scrobbling"]["password_hash"])
+
+    def __submit_scrobble_log(self, log):
+        self.logger.info("scrobbling {}...".format(log))
+        tracks = []
+        with open(log, "r") as f:
+            for line in f:
+                if line.startswith("#"):
+                    # ignore comment lines (found at the top of the file)
+                    continue
+                parts = re.split(r"\t", line.rstrip("\r\n"))
+                parts = [ None if p == "" else p for p in parts ]
+                track = {"artist":    parts[0],
+                         "album":     parts[1],
+                         "title":     parts[2],
+                         "track_num": parts[3],
+                         "duration":  parts[4],
+                         "status":    parts[5],
+                         "timestamp": self.__fix_timestamp(int(parts[6])),
+                         "mbid":      parts[7]
+                }
+                self.logger.info("{} {} {} - {}".format(track["status"], track["timestamp"], track["artist"], track["title"]))
+                if track["status"] == "S":
+                    # song was considered skipped, ignore
+                    continue
+                elif track["status"] == "L":
+                    # song was considered listened to, scrobble it
+                    tracks.append(track)
+                else:
+                    self.exit("misformed scrobble log")
+        self.scrobbler.scrobble_many(tracks)
+
+    def __fix_timestamp(self, epoch):
+        return datetime.datetime.utcfromtimestamp(epoch).strftime("%s")
 
     def cmd_all(self):
         self.process_scrobbles()
