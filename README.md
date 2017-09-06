@@ -8,7 +8,8 @@ scripts.
 Dependencies
 ------------
 
-  * `pylast`
+  * `pylast` (get it from pip)
+  * `sshfs`
 
 
 Usage
