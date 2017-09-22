@@ -213,21 +213,24 @@ class MP3Ctl:
     def __podcasts_mount_sshfs(self):
         remote_host = "raehik.net"
         remote_port = "6176"
-        remote_dir = "media/podcasts"
+        remote_dir = "/mnt/media/podcasts"
 
         if os.path.exists(self.media_loc["podcasts"]):
             self.exit("podcast archive directory already exists", MP3Ctl.ERR_DEVICE)
         os.mkdir(self.media_loc["podcasts"])
 
         self.logger.info("mounting podcast archive...")
-        #self.logger.info("mounting {}:{} -p {} read-only...".format(remote_host, remote_dir, remote_port))
-        self.get_shell(["sshfs", "-o", "ro", "-p", remote_port,
+        ret = self.get_shell(["sshfs", "-o", "ro", "-p", remote_port,
             "{}:{}".format(remote_host, remote_dir),
             self.media_loc["podcasts"]])
+        if ret != 0:
+            self.exit("couldn't mount podcast archive", MP3Ctl.ERR_DEVICE)
 
     def __podcasts_unmount_sshfs(self):
         self.logger.info("unmounting podcast archive...")
-        self.get_shell(["fusermount", "-u", self.media_loc["podcasts"]])
+        ret = self.get_shell(["fusermount", "-u", self.media_loc["podcasts"]])
+        if ret != 0:
+            self.exit("couldn't unmount podcast archive", MP3Ctl.ERR_DEVICE)
         os.rmdir(self.media_loc["podcasts"])
 
     def cp_podcasts(self):
