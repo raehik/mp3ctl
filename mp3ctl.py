@@ -94,10 +94,11 @@ class MP3Ctl:
                 description="Copy select podcasts (defined in MP3Ctl) to MP3 player.")
         subp_podcasts.set_defaults(func=self.cp_podcasts)
 
-        subp_all = subparsers.add_parser("all",
-                help="run all maintenance commands",
+        subp_all = subparsers.add_parser("maintenance",
+                help="run maintenance commands",
+                aliases=["maint"],
                 description="Run all maintenance commands.")
-        subp_all.set_defaults(func=self.cmd_all)
+        subp_all.set_defaults(func=self.cmd_maintenance)
 
         self.args = self.parser.parse_args()
         if self.args.verbose == 0:
@@ -344,7 +345,7 @@ class MP3Ctl:
     def __fix_timestamp(self, epoch):
         return datetime.datetime.utcfromtimestamp(epoch).strftime("%s")
 
-    def cmd_all(self):
+    def cmd_maintenance(self):
         self.process_scrobbles()
         self.cp_playlists()
         self.cp_lyrics()
