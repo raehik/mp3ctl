@@ -94,11 +94,11 @@ class MP3Ctl:
                 description="Copy select podcasts (defined in MP3Ctl) to MP3 player.")
         subp_podcasts.set_defaults(func=self.cp_podcasts)
 
-        subp_all = subparsers.add_parser("maintenance",
+        subp_maintenance = subparsers.add_parser("maintenance",
                 help="run maintenance commands",
                 aliases=["maint"],
                 description="Run all maintenance commands.")
-        subp_all.set_defaults(func=self.cmd_maintenance)
+        subp_maintenance.set_defaults(func=self.cmd_maintenance)
 
         self.args = self.parser.parse_args()
         if self.args.verbose == 0:
