@@ -34,6 +34,7 @@ class MP3Ctl:
         }
         self.media_loc = {
             "music":     os.path.join(os.environ["HOME"], "media", "music"),
+            "music-portable": os.path.join(os.environ["HOME"], "media", "music-etc", "music-portable"),
             "playlists": os.path.join(os.environ["HOME"], "media", "music-etc", "playlists"),
             "lyrics":    os.path.join(os.environ["HOME"], "media", "music-etc", "lyrics"),
             "scrobbles": os.path.join(os.environ["HOME"], "media", "music-etc", "mp3-scrobbles"),
@@ -208,7 +209,7 @@ class MP3Ctl:
 
     def cp_music(self):
         self.mount_dev("media")
-        self.__cp_contents(self.media_loc["music"], os.path.join(self.device_dir["media"], "music"))
+        self.__cp_contents(self.media_loc["music-portable"], os.path.join(self.device_dir["media"], "music"))
         self.unmount_dev("media")
 
     def __podcasts_mount_sshfs(self):
