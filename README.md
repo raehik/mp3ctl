@@ -10,6 +10,7 @@ Dependencies
 
   * `pylast` (get it from pip)
   * `sshfs`
+  * my `raehutils` module (TODO/ask me)
 
 
 Usage
