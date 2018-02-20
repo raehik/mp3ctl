@@ -16,41 +16,29 @@ import pylast
 import configparser
 
 class MP3Ctl(raehutils.RaehBaseClass):
-    MUSCTL = "musctl.py"
+    DEF_CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expandvars("$HOME/.config"), "mp3ctl.ini")
+
+    DEF_MUSCTL = "musctl.py"
+    DEF_CONVERTED_EXTS = ["flac"]
+
     PL_REFMT_EXT = "m3u8" # fixes Unicode playlists in Rockbox
     PL_REFMT_PREFIX = "/<microSD1>/music" # easy method for making MPD playlists
                                           # work with Rockbox
     SCROB_LOG = ".scrobbler.log"
     SCROB_LOG_ARCHIVE_FILE = "{}-scrobbler-log.txt".format(time.strftime("%F-%T"))
-    CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expandvars("$HOME/.config"), "mp3ctl.ini")
 
-    ERR_DEVICE = 3
-    ERR_ARGS = 4
-    ERR_SCROBBLER = 5
-    ERR_INTERNAL = 10
-    ERR_MUSCTL = 11
-    ERR_RSYNC = 12
+    LYRICS_UNWANTED = [ "[instrumental]", "[not found]" ]
+
+    ERR_DEVICE    = 1
+    ERR_ARGS      = 2
+    ERR_SCROBBLER = 3
+    ERR_INTERNAL  = 4
+    ERR_MUSCTL    = 5
+    ERR_RSYNC     = 6
+    ERR_CONFIG    = 7
 
     def __init__(self):
-        self.device_dir = {
-            "media": os.path.join("/mnt-set", "mp3-sd"),
-            "sys":   os.path.join("/mnt-set", "mp3-sys"),
-        }
-        self.media_loc = {
-            "music":     os.path.join(os.environ["HOME"], "media", "music"),
-            "music-portable": os.path.join(os.environ["HOME"], "media", "music-etc", "music-portable"),
-            "playlists": os.path.join(os.environ["HOME"], "media", "music-etc", "playlists"),
-            "lyrics":    os.path.join(os.environ["HOME"], "media", "music-etc", "lyrics"),
-            "scrobbles": os.path.join(os.environ["HOME"], "media", "music-etc", "mp3-scrobbles"),
-            "podcasts":  os.path.join(os.environ["HOME"], "media", "podcasts", "archive"),
-        }
-
         self.root_tmpdir = tempfile.mkdtemp(prefix="tmp-{}-".format(os.path.basename(__file__)))
-
-        self.converted_exts = ["flac"]
-
-        self.config = configparser.ConfigParser()
-        self.config.read(MP3Ctl.CONFIG_FILE)
 
     def _deinit(self):
         self.logger.debug("deinitialising...")
@@ -61,7 +49,8 @@ class MP3Ctl(raehutils.RaehBaseClass):
     def _parse_args(self):
         self.parser = argparse.ArgumentParser(description="Manage and maintain a music library.")
         self.parser.add_argument("-v", "--verbose", help="be verbose", action="count", default=0)
-        self.parser.add_argument("-q", "--quiet", help="be quiet (overrides -v)", action="count", default=0)
+        self.parser.add_argument("-q", "--quiet",   help="be quiet (overrides -v)", action="count", default=0)
+        self.parser.add_argument("-c", "--config",  help="specify configuration file", metavar="FILE", default=MP3Ctl.DEF_CONFIG_FILE)
         subparsers = self.parser.add_subparsers(title="commands", dest="command", metavar="[command]")
         subparsers.required = True
 
@@ -107,27 +96,71 @@ class MP3Ctl(raehutils.RaehBaseClass):
 
         self.args.verbose += 1 # force some verbosity
         self._parse_verbosity()
+        self._read_config()
+
+    def _read_config(self):
+        config_file = self.args.config
+        self.config = configparser.ConfigParser()
+        self.config.read(config_file)
+
+        try:
+            self.musctl_bin = self.config["General"]["musctl"]
+        except (AttributeError, KeyError):
+            self.musctl_bin = MP3Ctl.DEF_MUSCTL
+        try:
+            converted_exts_str = self.config["General"]["musctl_converted_exts"]
+            self.converted_exts = converted_exts_str.split(",")
+        except (AttributeError, KeyError):
+            self.converted_exts = MP3Ctl.DEF_CONVERTED_EXTS
+
+        self.media_loc = {
+            "music":          self._get_general_opt("media_music"),
+            "playlists":      self._get_general_opt("media_playlists"),
+            "lyrics":         self._get_general_opt("media_lyrics"),
+            "scrobbles":      self._get_general_opt("media_scrobbles"),
+            "podcasts":       self._get_general_opt("media_podcasts"),
+            "music-portable": self._get_general_opt("media_music_portable"),
+            "dev-music":      self._get_general_opt("device_music"),
+            "dev-playlists":  self._get_general_opt("device_playlists"),
+            "dev-lyrics":     self._get_general_opt("device_lyrics"),
+            "dev-podcasts":   self._get_general_opt("device_podcasts")
+        }
+
+        self.device_loc = {
+            "media":  self._get_general_opt("device_media"),
+            "system": self._get_general_opt("device_system")
+        }
+
+    def _get_general_opt(self, opt_name):
+        try:
+            return os.path.expanduser(self.config["General"][opt_name])
+        except (AttributeError, KeyError):
+            return None
+
+    def _require_locs(self, locs):
+        for loc in locs:
+            if loc == None:
+                self.fail("missing a required location", MP3Ctl.ERR_CONFIG)
+                return False
+        return True
     ## }}}
 
     ## Device mount & unmount {{{
-    def __ensure_is_device(self, dev):
-        if dev not in self.device_dir.keys():
-            self.fail("no such configured media device '{}'".format(dev), MP3Ctl.ERR_INTERNAL)
+    def mount_dev_media(self):   self._mount_dir(self.device_loc["media"])
+    def unmount_dev_media(self): self._unmount_dir(self.device_loc["media"])
+    def mount_dev_sys(self):     self._mount_dir(self.device_loc["system"])
+    def unmount_dev_sys(self):   self._unmount_dir(self.device_loc["system"])
 
-    def mount_dev(self, dev):
-        """Try to mount a media device."""
-        self.__ensure_is_device(dev)
-        mnt_dir = self.device_dir[dev]
+    def _mount_dir(self, mnt_dir):
+        """Try to mount a directory, assuming it's in fstab."""
         self.logger.debug("trying to mount {}...".format(mnt_dir))
         self.fail_if_error(
                 raehutils.get_shell(["mount", mnt_dir])[0],
                 "could not mount directory {}: is the device plugged in?".format(mnt_dir),
                 MP3Ctl.ERR_DEVICE)
 
-    def unmount_dev(self, dev):
-        """Try to unmount a media device."""
-        self.__ensure_is_device(dev)
-        mnt_dir = self.device_dir[dev]
+    def _unmount_dir(self, mnt_dir):
+        """Try to unmount a directory."""
         self.logger.debug("trying to unmount {}...".format(mnt_dir))
         self.fail_if_error(
                 raehutils.get_shell(["umount", mnt_dir])[0],
@@ -144,12 +177,36 @@ class MP3Ctl(raehutils.RaehBaseClass):
         if function_ret != 0:
             self.fail(msg, ret)
 
+    def run_shell_cmd(self, cmd, cwd=None, min_verb_lvl=3):
+        """Run a shell command, only showing output if sufficiently verbose.
+
+        Assumes that command's output is "optional" in the first place, and
+        doesn't require any input.
+
+        @param cmd command to run as an array, where each element is an argument
+        @param cwd if present, directory to use as CWD
+        @param min_verb_lvl verbosity level required to show output
+        @return the command's exit code
+        """
+        rc = 0
+        if self.args.quiet == 0 and self.args.verbose >= min_verb_lvl:
+            rc = raehutils.drop_to_shell(cmd, cwd=cwd)
+        else:
+            rc = raehutils.get_shell(cmd, cwd=cwd)[0]
+        return rc
+
     def cmd_cp_playlists(self):
+        self._require_locs([
+            self.device_loc["media"],
+            self.media_loc["playlists"],
+            self.media_loc["dev-playlists"]
+        ])
+
         self.logger.info("copying playlists to device...")
         self.logger.info("checking playlists with musctl...")
         # TODO: maybe split maintenance cmd into maintenance and maintenance-pl
         self.fail_if_error(
-                raehutils.drop_to_shell([MP3Ctl.MUSCTL, "maintenance"]),
+                raehutils.drop_to_shell([self.musctl_bin, "maintenance"]),
                 "error checking playlists with musctl",
                 MP3Ctl.ERR_MUSCTL)
         tmpdir = os.path.join(self.root_tmpdir, "playlists")
@@ -171,9 +228,11 @@ class MP3Ctl(raehutils.RaehBaseClass):
                 f.truncate()
 
         self.logger.info("copying playlists over...")
-        self.mount_dev("media")
-        self.__cp_dir_contents(tmpdir, os.path.join(self.device_dir["media"], "playlists"))
-        self.unmount_dev("media")
+        self.mount_dev_media()
+        self.__cp_dir_contents(
+                tmpdir,
+                os.path.join(self.device_loc["media"], self.media_loc["dev-playlists"]))
+        self.unmount_dev_media()
 
     def __edit_playlist_line(self, track):
         # prefix
@@ -193,7 +252,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
         @param dst a valid filepath (will be created if not present)
         """
         # TODO: should --modify-window=10 be an optional argument instead?
-        cmd_rsync = ["rsync", "-a", "--modify-window=10"]
+        cmd_rsync = ["rsync", "-a", "--no-links", "--modify-window=10"]
 
         # show output depending on verbosity
         if self.args.verbose == 2:
@@ -217,7 +276,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
         """
         # TODO: code duplication
         # TODO: should --modify-window=10 be an optional argument instead?
-        cmd_rsync = ["rsync", "-a", "--modify-window=10"]
+        cmd_rsync = ["rsync", "-a", "--no-links", "--modify-window=10"]
 
         # show output depending on verbosity
         if self.args.verbose == 2:
@@ -232,33 +291,22 @@ class MP3Ctl(raehutils.RaehBaseClass):
                 "rsync copy failed", MP3Ctl.ERR_RSYNC)
         self.logger.info("copy finished successfully")
 
-    def run_shell_cmd(self, cmd, cwd=None, min_verb_lvl=3):
-        """Run a shell command, only showing output if sufficiently verbose.
-
-        Assumes that command's output is "optional" in the first place, and
-        doesn't require any input.
-
-        @param cmd command to run as an array, where each element is an argument
-        @param cwd if present, directory to use as CWD
-        @param min_verb_lvl verbosity level required to show output
-        @return the command's exit code
-        """
-        rc = 0
-        if self.args.quiet == 0 and self.args.verbose >= min_verb_lvl:
-            rc = raehutils.drop_to_shell(cmd, cwd=cwd)
-        else:
-            rc = raehutils.get_shell(cmd, cwd=cwd)[0]
-        return rc
-
     def cmd_cp_lyrics(self):
+        self._require_locs([
+            self.device_loc["media"],
+            self.media_loc["lyrics"],
+            self.media_loc["dev-lyrics"]
+        ])
+
         tmpdir = os.path.join(self.root_tmpdir, "lyrics")
         os.mkdir(tmpdir)
 
         self.logger.info("filtering unwanted lyrics...")
         for f in os.listdir(self.media_loc["lyrics"]):
             with open(os.path.join(self.media_loc["lyrics"], f)) as f_handle:
-                # don't copy lyrics for instrumental songs with no notes
-                if f_handle.read().strip() == "[instrumental]":
+                # don't copy unwanted lyrics (instrumental/not found with no
+                # notes)
+                if f_handle.read().strip() in MP3Ctl.LYRICS_UNWANTED:
                     continue
             shutil.copy(os.path.join(self.media_loc["lyrics"], f),
                         os.path.join(tmpdir, f))
@@ -276,15 +324,24 @@ class MP3Ctl(raehutils.RaehBaseClass):
             shutil.move(os.path.join(tmpdir, f), os.path.join(tmpdir, track_title) + ".txt")
 
         self.logger.info("copying lyrics over...")
-        self.mount_dev("media")
-        self.__cp_dir_contents(tmpdir, os.path.join(self.device_dir["media"], "lyrics"))
-        self.unmount_dev("media")
+        self.mount_dev_media()
+        self.__cp_dir_contents(tmpdir,
+                os.path.join(self.device_loc["media"], self.media_loc["dev-lyrics"]))
+        self.unmount_dev_media()
 
     def cmd_cp_music(self):
+        self._require_locs([
+            self.device_loc["media"],
+            self.media_loc["music-portable"],
+            self.media_loc["dev-music"]
+        ])
+
         self.logger.info("copying music over (from portable library)...")
-        self.mount_dev("media")
-        self.__cp_dir_contents(self.media_loc["music-portable"], os.path.join(self.device_dir["media"], "music"))
-        self.unmount_dev("media")
+        self.mount_dev_media()
+        self.__cp_dir_contents(
+                self.media_loc["music-portable"],
+                os.path.join(self.device_loc["media"], self.media_loc["dev-music"]))
+        self.unmount_dev_media()
 
     def __podcasts_mount_sshfs(self):
         remote_host = "raehik.net"
@@ -310,6 +367,12 @@ class MP3Ctl(raehutils.RaehBaseClass):
         os.rmdir(self.media_loc["podcasts"])
 
     def cmd_cp_podcasts(self):
+        self._require_locs([
+            self.device_loc["media"],
+            self.media_loc["podcasts"],
+            self.media_loc["dev-podcasts"]
+        ])
+
         self.__podcasts_mount_sshfs()
 
         ## Podcast: NHK Radio News {{{
@@ -317,7 +380,10 @@ class MP3Ctl(raehutils.RaehBaseClass):
         p1_dest = "nhk-radio-news"
 
         p1_src_abs = os.path.join(self.media_loc["podcasts"], p1_src)
-        p1_dest_abs = os.path.join(self.device_dir["media"], "podcasts", p1_dest)
+        p1_dest_abs = os.path.join(
+                self.device_loc["media"],
+                self.media_loc["dev-podcasts"],
+                p1_dest)
         d_today = datetime.datetime.now().strftime("%Y%m%d")
         d_yest = (datetime.datetime.now() - datetime.timedelta(1)).strftime("%Y%m%d")
         d_two_days = (datetime.datetime.now() - datetime.timedelta(2)).strftime("%Y%m%d")
@@ -333,16 +399,21 @@ class MP3Ctl(raehutils.RaehBaseClass):
             return
         ## }}}
 
-        self.mount_dev("media")
+        self.mount_dev_media()
 
         shutil.rmtree(p1_dest_abs)
 
         self.__cp_files(p1_selected, p1_dest_abs)
 
-        self.unmount_dev("media")
+        self.unmount_dev_media()
         self.__podcasts_unmount_sshfs()
 
     def cmd_process_scrobbles(self):
+        self._require_locs([
+            self.device_loc["system"],
+            self.media_loc["scrobbles"]
+        ])
+
         self.logger.info("processing scrobbles...")
         log_list = []
         if hasattr(self.args, "file") and len(self.args.file) >= 1:
@@ -353,16 +424,17 @@ class MP3Ctl(raehutils.RaehBaseClass):
         else:
             self.logger.info("grabbing device scrobble log...")
             log_archive_file = os.path.join(self.media_loc["scrobbles"], MP3Ctl.SCROB_LOG_ARCHIVE_FILE)
-            self.mount_dev("sys")
+            self.mount_dev_sys()
             try:
                 # archive log
-                shutil.move(os.path.join(self.device_dir["sys"], MP3Ctl.SCROB_LOG),
-                            log_archive_file)
+                shutil.move(
+                        os.path.join(self.device_loc["system"], MP3Ctl.SCROB_LOG),
+                        log_archive_file)
             except FileNotFoundError:
                 self.logger.info("no scrobbler log present")
-                self.unmount_dev("sys")
+                self.unmount_dev_sys()
                 return
-            self.unmount_dev("sys")
+            self.unmount_dev_sys()
 
             # remove exec. bit
             raehutils.get_shell(["chmod", "-x", log_archive_file])
