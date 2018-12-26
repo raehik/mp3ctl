@@ -48,9 +48,10 @@ class MP3Ctl(raehutils.RaehBaseClass):
     ## CLI-related {{{
     def _parse_args(self):
         self.parser = argparse.ArgumentParser(description="Manage and maintain a music library.")
-        self.parser.add_argument("-v", "--verbose", help="be verbose", action="count", default=0)
-        self.parser.add_argument("-q", "--quiet",   help="be quiet (overrides -v)", action="count", default=0)
-        self.parser.add_argument("-c", "--config",  help="specify configuration file", metavar="FILE", default=MP3Ctl.DEF_CONFIG_FILE)
+        self.parser.add_argument("-v",  "--verbose",    help="be verbose", action="count", default=0)
+        self.parser.add_argument("-q",  "--quiet",      help="be quiet (overrides -v)", action="count", default=0)
+        self.parser.add_argument("-c",  "--config",     help="specify configuration file", metavar="FILE", default=MP3Ctl.DEF_CONFIG_FILE)
+        self.parser.add_argument("-L",  "--copy-links", help="when copying, transform symlink into referent file/dir", action="store_true")
         subparsers = self.parser.add_subparsers(title="commands", dest="command", metavar="[command]")
         subparsers.required = True
 
@@ -252,7 +253,9 @@ class MP3Ctl(raehutils.RaehBaseClass):
         @param dst a valid filepath (will be created if not present)
         """
         # TODO: should --modify-window=10 be an optional argument instead?
-        cmd_rsync = ["rsync", "-a", "--no-links", "--modify-window=10"]
+        cmd_rsync = ["rsync", "-a", "--modify-window=10"]
+        if self.parser.copy_links:
+            cmd_rsync.append("--copy-links")
 
         # show output depending on verbosity
         if self.args.verbose == 2:
@@ -276,7 +279,9 @@ class MP3Ctl(raehutils.RaehBaseClass):
         """
         # TODO: code duplication
         # TODO: should --modify-window=10 be an optional argument instead?
-        cmd_rsync = ["rsync", "-a", "--no-links", "--modify-window=10"]
+        cmd_rsync = ["rsync", "-a", "--modify-window=10"]
+        if self.parser.copy_links:
+            cmd_rsync.append("--copy-links")
 
         # show output depending on verbosity
         if self.args.verbose == 2:
