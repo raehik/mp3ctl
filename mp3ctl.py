@@ -254,7 +254,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
         """
         # TODO: should --modify-window=10 be an optional argument instead?
         cmd_rsync = ["rsync", "-a", "--modify-window=10"]
-        if hasattr(self.parser, "copy_links") and self.parser.copy_links:
+        if hasattr(self.args, "copy_links") and self.args.copy_links:
             cmd_rsync.append("--copy-links")
 
         # show output depending on verbosity
