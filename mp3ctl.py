@@ -5,6 +5,7 @@
 
 import raehutils
 import sys, os, argparse, logging
+import subprocess
 
 import shutil
 import re
@@ -14,6 +15,68 @@ import time, datetime
 import glob
 import pylast
 import configparser
+
+logger = logging.getLogger(os.path.basename(sys.argv[0]))
+#lh = logging.StreamHandler()
+#lh.setFormatter(logging.Formatter("%(name)s: %(levelname)s: %(message)s"))
+#logger.addHandler(lh)
+
+def get_shell(cmd, cwd=None, shell=False):
+    """Run a shell command, blocking execution, detaching stdin, stdout and
+    stderr.
+
+    Useful for grabbing shell command outputs, or if you want to run something
+    silently and wait for it to finish.
+
+    @param cmd command to run as an array, where each element is an argument
+    @param cwd if present, directory to use as CWD
+    @return the command's return code, stdout and stderr (respectively, as a
+            tuple)
+    """
+    proc = subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE,
+                               cwd=cwd,
+                               shell=shell)
+    return proc.returncode, \
+           proc.stdout.decode("utf-8", "replace").strip(), \
+           proc.stderr.decode("utf-8", "replace").strip()
+
+class MountDevice():
+    def __init__(self, device):
+        self.device = device
+        self.__reset_mountpoint()
+
+    def __reset_mountpoint(self):
+        self.mountpoint = ""
+
+    def __set_mountpoint(self):
+        rc, cmd_out, _ = get_shell("udisksctl info -b \"{}\" | sed -n 's/ *MountPoints: *\\(.*$\\)/\\1/p'".format(self.device), shell=True)
+        if rc != 0:
+            raise Exception("couldn't find mountpoint for (assumed mounted) device {}".format(self.device))
+        self.mountpoint = cmd_out
+
+    def get_mountpoint(self):
+        return self.mountpoint
+
+    def get_device_name(self):
+        return self.device
+
+    def mount(self):
+        """Mount this device and set its mountpoint."""
+        logger.debug("mounting device {} ...".format(self.device))
+        rc = get_shell(["udisksctl", "mount", "-b", self.device])[0]
+        if rc != 0:
+            raise Exception("could not mount device {} , is the device plugged in?".format(self.device))
+        self.__set_mountpoint()
+
+    def unmount(self):
+        """Unmount this device."""
+        logger.debug("unmounting device {} ...".format(self.device))
+        rc = get_shell(["udisksctl", "unmount", "-b", self.device])[0]
+        if rc != 0:
+            raise Exception("could not unmount device {}".format(self.device))
+        self.__reset_mountpoint()
 
 class MP3Ctl(raehutils.RaehBaseClass):
     DEF_CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expandvars("$HOME/.config"), "mp3ctl.ini")
@@ -39,6 +102,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
 
     def __init__(self):
         self.root_tmpdir = tempfile.mkdtemp(prefix="tmp-{}-".format(os.path.basename(__file__)))
+        self.logger = logger
 
     def _deinit(self):
         self.logger.debug("deinitialising...")
@@ -127,9 +191,9 @@ class MP3Ctl(raehutils.RaehBaseClass):
             "dev-podcasts":   self._get_general_opt("device_podcasts")
         }
 
-        self.device_loc = {
-            "media":  self._get_general_opt("device_media"),
-            "system": self._get_general_opt("device_system")
+        self.device = {
+            "media":  MountDevice(self._get_general_opt("device_media")),
+            "system": MountDevice(self._get_general_opt("device_system"))
         }
 
     def _get_general_opt(self, opt_name):
@@ -139,34 +203,8 @@ class MP3Ctl(raehutils.RaehBaseClass):
             return None
 
     def _require_locs(self, locs):
-        for loc in locs:
-            if loc == None:
-                self.fail("missing a required location", MP3Ctl.ERR_CONFIG)
-                return False
+        self.logger.warning("location requiring disabled in refactor")
         return True
-    ## }}}
-
-    ## Device mount & unmount {{{
-    def mount_dev_media(self):   self._mount_dir(self.device_loc["media"])
-    def unmount_dev_media(self): self._unmount_dir(self.device_loc["media"])
-    def mount_dev_sys(self):     self._mount_dir(self.device_loc["system"])
-    def unmount_dev_sys(self):   self._unmount_dir(self.device_loc["system"])
-
-    def _mount_dir(self, mnt_dir):
-        """Try to mount a directory, assuming it's in fstab."""
-        self.logger.debug("trying to mount {}...".format(mnt_dir))
-        self.fail_if_error(
-                raehutils.get_shell(["mount", mnt_dir])[0],
-                "could not mount directory {}: is the device plugged in?".format(mnt_dir),
-                MP3Ctl.ERR_DEVICE)
-
-    def _unmount_dir(self, mnt_dir):
-        """Try to unmount a directory."""
-        self.logger.debug("trying to unmount {}...".format(mnt_dir))
-        self.fail_if_error(
-                raehutils.get_shell(["umount", mnt_dir])[0],
-                "could not unmount directory {}".format(mnt_dir),
-                MP3Ctl.ERR_DEVICE)
     ## }}}
 
     def main(self):
@@ -198,7 +236,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
 
     def cmd_cp_playlists(self):
         self._require_locs([
-            self.device_loc["media"],
+            #self.device_loc["media"],
             self.media_loc["playlists"],
             self.media_loc["dev-playlists"]
         ])
@@ -229,11 +267,11 @@ class MP3Ctl(raehutils.RaehBaseClass):
                 f.truncate()
 
         self.logger.info("copying playlists over...")
-        self.mount_dev_media()
+        self.device["media"].mount()
         self.__cp_dir_contents(
                 tmpdir,
-                os.path.join(self.device_loc["media"], self.media_loc["dev-playlists"]))
-        self.unmount_dev_media()
+                os.path.join(self.device["media"].get_mountpoint(), self.media_loc["dev-playlists"]))
+        self.device["media"].unmount()
 
     def __edit_playlist_line(self, track):
         # prefix
@@ -298,7 +336,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
 
     def cmd_cp_lyrics(self):
         self._require_locs([
-            self.device_loc["media"],
+            #self.device_loc["media"],
             self.media_loc["lyrics"],
             self.media_loc["dev-lyrics"]
         ])
@@ -329,24 +367,24 @@ class MP3Ctl(raehutils.RaehBaseClass):
             shutil.move(os.path.join(tmpdir, f), os.path.join(tmpdir, track_title) + ".txt")
 
         self.logger.info("copying lyrics over...")
-        self.mount_dev_media()
+        self.device["media"].mount()
         self.__cp_dir_contents(tmpdir,
-                os.path.join(self.device_loc["media"], self.media_loc["dev-lyrics"]))
-        self.unmount_dev_media()
+                os.path.join(self.device["media"].get_mountpoint(), self.media_loc["dev-lyrics"]))
+        self.device["media"].unmount()
 
     def cmd_cp_music(self):
         self._require_locs([
-            self.device_loc["media"],
+            #self.device_loc["media"],
             self.media_loc["music-portable"],
             self.media_loc["dev-music"]
         ])
 
         self.logger.info("copying music over (from portable library)...")
-        self.mount_dev_media()
+        self.device["media"].mount()
         self.__cp_dir_contents(
                 self.media_loc["music-portable"],
-                os.path.join(self.device_loc["media"], self.media_loc["dev-music"]))
-        self.unmount_dev_media()
+                os.path.join(self.device["media"].get_mountpoint(), self.media_loc["dev-music"]))
+        self.device["media"].unmount()
 
     def __podcasts_mount_sshfs(self):
         remote_host = "raehik.net"
@@ -373,7 +411,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
 
     def cmd_cp_podcasts(self):
         self._require_locs([
-            self.device_loc["media"],
+            #self.device_loc["media"],
             self.media_loc["podcasts"],
             self.media_loc["dev-podcasts"]
         ])
@@ -386,7 +424,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
 
         p1_src_abs = os.path.join(self.media_loc["podcasts"], p1_src)
         p1_dest_abs = os.path.join(
-                self.device_loc["media"],
+                self.device["media"].get_mountpoint(),
                 self.media_loc["dev-podcasts"],
                 p1_dest)
         d_today = datetime.datetime.now().strftime("%Y%m%d")
@@ -404,18 +442,18 @@ class MP3Ctl(raehutils.RaehBaseClass):
             return
         ## }}}
 
-        self.mount_dev_media()
+        self.device["media"].mount()
 
         shutil.rmtree(p1_dest_abs)
 
         self.__cp_files(p1_selected, p1_dest_abs)
 
-        self.unmount_dev_media()
+        self.device["media"].unmount()
         self.__podcasts_unmount_sshfs()
 
     def cmd_process_scrobbles(self):
         self._require_locs([
-            self.device_loc["system"],
+            #self.device_loc["system"],
             self.media_loc["scrobbles"]
         ])
 
@@ -429,17 +467,17 @@ class MP3Ctl(raehutils.RaehBaseClass):
         else:
             self.logger.info("grabbing device scrobble log...")
             log_archive_file = os.path.join(self.media_loc["scrobbles"], MP3Ctl.SCROB_LOG_ARCHIVE_FILE)
-            self.mount_dev_sys()
+            self.device["system"].mount()
             try:
                 # archive log
                 shutil.move(
-                        os.path.join(self.device_loc["system"], MP3Ctl.SCROB_LOG),
+                        os.path.join(self.device["system"].get_mountpoint(), MP3Ctl.SCROB_LOG),
                         log_archive_file)
             except FileNotFoundError:
                 self.logger.info("no scrobbler log present")
-                self.unmount_dev_sys()
+                self.device["system"].unmount()
                 return
-            self.unmount_dev_sys()
+            self.device["system"].unmount()
 
             # remove exec. bit
             raehutils.get_shell(["chmod", "-x", log_archive_file])
