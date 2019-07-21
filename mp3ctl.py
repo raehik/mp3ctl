@@ -79,7 +79,7 @@ class MountDevice():
         self.__reset_mountpoint()
 
 class MP3Ctl(raehutils.RaehBaseClass):
-    DEF_CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expandvars("$HOME/.config"), "mp3ctl.ini")
+    DEF_CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expandvars("$HOME/.config"), "mp3ctl", "config.ini")
 
     DEF_MUSCTL = "musctl.py"
     DEF_CONVERTED_EXTS = ["flac"]
