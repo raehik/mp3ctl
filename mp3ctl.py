@@ -57,6 +57,9 @@ class MountDevice():
         self.mountpoint = cmd_out
 
     def get_mountpoint(self):
+        # maybe not good, but for now, if this function is called, assume that
+        # we *are* mounted... so refresh mountpoint
+        self.__set_mountpoint();
         return self.mountpoint
 
     def get_device_name(self):
@@ -65,6 +68,7 @@ class MountDevice():
     def mount(self):
         """Mount this device and set its mountpoint."""
         logger.debug("mounting device {} ...".format(self.device))
+        logger.warning("TODO: should check if it's already mounted, fail if so")
         rc = get_shell(["udisksctl", "mount", "-b", self.device])[0]
         if rc != 0:
             raise Exception("could not mount device {} , is the device plugged in?".format(self.device))
@@ -156,6 +160,13 @@ class MP3Ctl(raehutils.RaehBaseClass):
                 aliases=["maint"],
                 description="Run all maintenance commands.")
         subp_maintenance.set_defaults(func=self.cmd_maintenance)
+
+        subp_mount = subparsers.add_parser("mount",
+                help="(un)mount one or more devices",
+                description="Just (un)mount the devices passed in the arguments. By default, uses system and media.")
+        subp_mount.add_argument("devices", nargs="*", help="devices to mount")
+        subp_mount.add_argument("-u", "--unmount", help="unmount instead", action="store_true")
+        subp_mount.set_defaults(func=self.cmd_mount)
 
         self.args = self.parser.parse_args()
 
@@ -543,6 +554,22 @@ class MP3Ctl(raehutils.RaehBaseClass):
         self.cmd_cp_playlists()
         self.cmd_cp_lyrics()
         self.cmd_cp_music()
+
+    def cmd_mount(self):
+        # default: mount system and media
+        devices = ["system", "media"]
+        if hasattr(self.args, "devices") and len(self.args.devices) >= 1:
+            devices = self.args.devices
+        for device in devices:
+            try:
+                if hasattr(self.args, "unmount") and self.args.unmount:
+                    self.logger.info("unmounting device {} from {} ...".format(device, self.device[device].get_mountpoint()))
+                    self.device[device].unmount()
+                else:
+                    self.device[device].mount()
+                    print("mounted device {} to {}".format(device, self.device[device].get_mountpoint()))
+            except KeyError:
+                self.fail("unknown device: {}".format(device), MP3Ctl.ERR_ARGS)
 
 if __name__ == "__main__":
     mp3ctl = MP3Ctl()
