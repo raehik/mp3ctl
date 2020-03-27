@@ -3,9 +3,7 @@
 # Manage a media device (MP3 player).
 #
 
-import raehutils
-import sys, os, argparse, logging
-import subprocess
+import sys, os, argparse, logging, subprocess
 
 import shutil
 import re
@@ -13,8 +11,9 @@ import fileinput
 import tempfile
 import time, datetime
 import glob
-import pylast
 import configparser
+
+import pylast
 
 logger = logging.getLogger(os.path.basename(sys.argv[0]))
 #lh = logging.StreamHandler()
@@ -41,6 +40,17 @@ def get_shell(cmd, cwd=None, shell=False):
     return proc.returncode, \
            proc.stdout.decode("utf-8", "replace").strip(), \
            proc.stderr.decode("utf-8", "replace").strip()
+
+def drop_to_shell(cmd, cwd=None):
+    """Run a shell command, blocking execution.
+
+    Doesn't touch any pipes. Like dropping to shell during execution.
+
+    @param cmd command to run as an array, where each element is an argument
+    @param cwd if present, directory to use as CWD
+    @return the command's exit code
+    """
+    return subprocess.run(cmd, cwd=cwd).returncode
 
 class MountDevice():
     def __init__(self, device):
@@ -82,7 +92,50 @@ class MountDevice():
             raise Exception("could not unmount device {}".format(self.device))
         self.__reset_mountpoint()
 
-class MP3Ctl(raehutils.RaehBaseClass):
+class BaseClass:
+    def _deinit(self):
+        self.logger.debug("deinitialising...")
+
+    ## CLI-related {{{
+    def _init_logging(self):
+        self.logger = logging.getLogger(os.path.basename(sys.argv[0]))
+        lh = logging.StreamHandler()
+        lh.setFormatter(logging.Formatter("%(name)s: %(levelname)s: %(message)s"))
+        self.logger.addHandler(lh)
+
+    def _parse_verbosity(self):
+        if self.args.verbose == 1:
+            self.logger.setLevel(logging.INFO)
+        elif self.args.verbose >= 2:
+            self.logger.setLevel(logging.DEBUG)
+        if self.args.quiet >= 1:
+            # reset verbosity (to make verbose/quiet checks easier)
+            self.args.verbose = 0
+            self.logger.setLevel(logging.NOTSET)
+
+    def run(self):
+        """Run from CLI: parse arguments, run main, deinitialise."""
+        self._init_logging()
+        self._parse_args()
+        self.main()
+        self._deinit()
+    ## }}}
+
+    def fail(self, msg="internal error", ret=1):
+        """Exit with a message and a return code.
+
+        Should only be used for errors -- if you want to deinitialise and exit
+        safely, simply return from main.
+
+        Suggested to use no parameters for internal functions that the user
+        doesn't need to know about (which generally indicates a logic error,
+        rather than an input one.)
+        """
+        self.logger.error(msg)
+        self._deinit()
+        sys.exit(ret)
+
+class MP3Ctl(BaseClass):
     DEF_CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expandvars("$HOME/.config"), "mp3ctl", "config.ini")
 
     DEF_MUSCTL = "musctl.py"
@@ -240,9 +293,9 @@ class MP3Ctl(raehutils.RaehBaseClass):
         """
         rc = 0
         if self.args.quiet == 0 and self.args.verbose >= min_verb_lvl:
-            rc = raehutils.drop_to_shell(cmd, cwd=cwd)
+            rc = drop_to_shell(cmd, cwd=cwd)
         else:
-            rc = raehutils.get_shell(cmd, cwd=cwd)[0]
+            rc = get_shell(cmd, cwd=cwd)[0]
         return rc
 
     def cmd_cp_playlists(self):
@@ -256,7 +309,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
         self.logger.info("checking playlists with musctl...")
         # TODO: maybe split maintenance cmd into maintenance and maintenance-pl
         self.fail_if_error(
-                raehutils.drop_to_shell([self.musctl_bin, "maintenance"]),
+                drop_to_shell([self.musctl_bin, "maintenance"]),
                 "error checking playlists with musctl",
                 MP3Ctl.ERR_MUSCTL)
         tmpdir = os.path.join(self.root_tmpdir, "playlists")
@@ -408,7 +461,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
 
         self.logger.info("mounting podcast archive...")
         self.fail_if_error(
-                raehutils.drop_to_shell(["sshfs", "-o", "ro", "-p", remote_port,
+                drop_to_shell(["sshfs", "-o", "ro", "-p", remote_port,
                     "{}:{}".format(remote_host, remote_dir),
                     self.media_loc["podcasts"]]),
                 "couldn't mount podcast archive", MP3Ctl.ERR_DEVICE)
@@ -416,7 +469,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
     def __podcasts_unmount_sshfs(self):
         self.logger.info("unmounting podcast archive...")
         self.fail_if_error(
-                raehutils.drop_to_shell(["fusermount", "-u", self.media_loc["podcasts"]]),
+                drop_to_shell(["fusermount", "-u", self.media_loc["podcasts"]]),
                 "couldn't unmount podcast archive", MP3Ctl.ERR_DEVICE)
         os.rmdir(self.media_loc["podcasts"])
 
@@ -491,7 +544,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
             self.device["system"].unmount()
 
             # remove exec. bit
-            raehutils.get_shell(["chmod", "-x", log_archive_file])
+            get_shell(["chmod", "-x", log_archive_file])
 
             self.logger.info("log moved from device -> {}".format(log_archive_file))
             log_list.append(log_archive_file)
@@ -501,7 +554,7 @@ class MP3Ctl(raehutils.RaehBaseClass):
         for log in log_list:
             if hasattr(self.args, "edit") and self.args.edit:
                 self.logger.info("editing scrobble log {}...".format(log))
-                raehutils.drop_to_shell([os.getenv("EDITOR", "vim"), log])
+                drop_to_shell([os.getenv("EDITOR", "vim"), log])
             self.__submit_scrobble_log(log)
 
     def __init_scrobbler(self):
